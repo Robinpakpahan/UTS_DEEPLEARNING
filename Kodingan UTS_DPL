@@ -1,0 +1,326 @@
+import tensorflow as tf
+from tensorflow import keras
+from tensorflow.keras.datasets import mnist
+from tensorflow.keras.models import Sequential, Model
+from tensorflow.keras.layers import (
+    Conv2D, MaxPooling2D, Flatten, Dense, Dropout, Input,
+    GlobalAveragePooling2D, Rescaling
+)
+from tensorflow.keras.utils import to_categorical
+from tensorflow.keras.applications import MobileNetV2
+import numpy as np
+import matplotlib.pyplot as plt
+import cv2  
+import os
+import glob 
+
+(x_train_orig, y_train_orig), (x_test_orig, y_test_orig) = mnist.load_data()
+
+# Pra-pemrosesan untuk Model A (28x28, 1 channel) ---
+x_train_A = np.expand_dims(x_train_orig, -1).astype('float32') / 255.0
+x_test_A = np.expand_dims(x_test_orig, -1).astype('float32') / 255.0
+
+# Pra-pemrosesan untuk Model B (48x48, 3 channel) 
+NEW_SIZE = 48 # Coba 48. Jika masih error, ganti ke 32
+
+# Merubah ukuran ke 48x48
+x_train_B_resized = tf.image.resize(np.expand_dims(x_train_orig, -1), (NEW_SIZE, NEW_SIZE))
+x_test_B_resized = tf.image.resize(np.expand_dims(x_test_orig, -1), (NEW_SIZE, NEW_SIZE))
+
+# Mengkonversi Grayscale ke RGB
+x_train_B = tf.image.grayscale_to_rgb(x_train_B_resized)
+x_test_B = tf.image.grayscale_to_rgb(x_test_B_resized)
+
+# One-Hot Encoding untuk Label (kedua model sama) 
+y_train_cat = to_categorical(y_train_orig, 10) 
+y_test_cat = to_categorical(y_test_orig, 10) 
+
+print(f"Bentuk data latih Model A: {x_train_A.shape}")
+print(f"Bentuk data uji Model B: {x_test_B.shape}")
+print(f"Bentuk label latih: {y_train_cat.shape}")
+
+# --- Visualisasi Contoh Citra MNIST ---
+print("\nVisualisasi 10 Citra Pertama dari MNIST:")
+plt.figure(figsize=(10, 5))
+for i in range(10):
+    plt.subplot(2, 5, i + 1)
+    plt.imshow(x_train_orig[i], cmap='gray')
+    plt.title(f"Label: {y_train_orig[i]}")
+    plt.axis('off')
+plt.suptitle("Contoh Data MNIST")
+plt.show()
+
+print("\n--- Bagian 2: Membangun dan Melatih Model A (CNN dari Nol) ---")
+
+# Membuat fungsi untuk merakit model
+def build_model_A():
+    
+    # Menggunakan model Sequential, artinya lapisan ditumpuk berurutan
+    model = Sequential([
+        
+        # Menentukan bentuk data input: 28x28 piksel, 1 channel (grayscale)
+        Input(shape=(28, 28, 1)), 
+        
+        # Lapisan Konvolusi pertama: mencari 32 pola dasar
+        Conv2D(32, kernel_size=(3, 3), activation="relu"),
+        # Lapisan Pooling: mengecilkan ukuran gambar (2x2)
+        MaxPooling2D(pool_size=(2, 2)),
+        
+        # Lapisan Konvolusi kedua: mencari 64 pola yang lebih detail
+        Conv2D(64, kernel_size=(3, 3), activation="relu"),
+        MaxPooling2D(pool_size=(2, 2)),
+        Flatten(),
+        Dropout(0.5),
+        Dense(128, activation="relu"),
+        Dense(10, activation="softmax") 
+    ])
+    
+    # Menentukan cara model belajar
+    model.compile(
+        optimizer='adam',
+        loss='categorical_crossentropy',
+        metrics=['accuracy']
+    )
+    return model
+    
+model_A = build_model_A()
+model_A.summary()
+
+# --- Latih Model A ---
+history_A = model_A.fit(
+    x_train_A, y_train_cat,
+    batch_size=128, # Hardcode batch size
+    epochs=10,      # Hardcode epochs
+    validation_data=(x_test_A, y_test_cat)
+)
+
+# Tampilkan Plot Training History Model A 
+print("\nMenampilkan Plot History Model A...")
+plt.figure(figsize=(12, 4))
+title_A = "Model A (CNN dari Nol)"
+
+# --- Tampilkan Plot Training History Model A (Kode Inline) ---
+print("\nMenampilkan Plot History Model A...")
+plt.figure(figsize=(12, 4))
+title_A = "Model A"
+
+# Plot Akurasi
+plt.subplot(1, 2, 1)
+plt.plot(history_A.history['accuracy'], label='Training Accuracy')
+plt.plot(history_A.history['val_accuracy'], label='Validation Accuracy')
+plt.title(f'Accuracy - {title_A}')
+plt.xlabel('Epoch')
+plt.ylabel('Accuracy')
+plt.legend()
+
+# Plot Loss
+plt.subplot(1, 2, 2)
+plt.plot(history_A.history['loss'], label='Training Loss')
+plt.plot(history_A.history['val_loss'], label='Validation Loss')
+plt.title(f'Loss - {title_A}')
+plt.xlabel('Epoch')
+plt.ylabel('Loss')
+plt.legend()
+
+plt.suptitle(f'Training History for {title_A}', fontsize=16)
+plt.tight_layout(rect=[0, 0.03, 1, 0.95])
+plt.show()
+
+# Fungsi Pra-pemrosesan untuk Citra Custom (Model A)
+def preprocess_custom_image_A(filepath):
+    img = cv2.imread(filepath, cv2.IMREAD_GRAYSCALE)
+    if img is None:
+        print(f"Error: Gagal membaca gambar di {filepath}")
+        return None
+    img_inverted = 255 - img
+    img_resized = cv2.resize(img_inverted, (28, 28), interpolation=cv2.INTER_AREA)
+    img_norm = img_resized.astype('float32') / 255.0
+    img_final = np.expand_dims(img_norm, axis=[0, -1])
+    return img_final, img_resized
+
+# Memuat dan Memproses 30 Citra Tulisan Tangan 
+custom_images_A = []
+custom_images_for_plot = []
+ground_truth_labels = []
+
+if not os.path.isdir('NIM'):
+    print("="*50)
+    print("ERROR: Folder 'NIM' tidak ditemukan.")
+    print("Silakan buat folder tersebut dan isi dengan 30 citra Anda (1.1.jpg, ..., 9.10.jpg).")
+    print("Melewatkan Bagian 3 dan 5.")
+    print("="*50)
+    SKIP_CUSTOM_EVAL = True
+else:
+
+    SKIP_CUSTOM_EVAL = False
+    print("Folder 'NIM' ditemukan. Memproses gambar...") 
+    
+    for digit in [1, 3, 9]: 
+        files = sorted(glob.glob(os.path.join('NIM', f'{digit}.*.jpg')))
+        
+        if len(files) == 0:
+            print(f"Peringatan: Ditemukan 0 file untuk NIM {digit} dengan pola '{digit}.*.jpg'.")
+        elif len(files) != 10:
+             print(f"Peringatan: Ditemukan {len(files)} file untuk NIM {digit}, seharusnya 10.")
+        else:
+             print(f"Ditemukan {len(files)} file untuk NIM {digit}.")
+             
+        for f in files:
+            processed_img, plot_img = preprocess_custom_image_A(f)
+            if processed_img is not None:
+                custom_images_A.append(processed_img)
+                custom_images_for_plot.append(plot_img)
+                ground_truth_labels.append(digit)
+
+if not SKIP_CUSTOM_EVAL and len(custom_images_A) > 0:
+    
+    print("Visualisasi 30 citra tulisan tangan setelah pra-pemrosesan (Model A):")
+    plt.figure(figsize=(15, 6)) # Ukuran figure 15x6
+    
+    # Loop melalui semua gambar yang dimuat
+    for i in range(len(custom_images_for_plot)):
+        # Membuat grid 3 baris x 10 kolom
+        plt.subplot(3, 10, i + 1) 
+        plt.imshow(custom_images_for_plot[i], cmap='gray')
+        plt.title(f"Asli: {ground_truth_labels[i]}") 
+        plt.axis('off') 
+    
+    plt.suptitle("30 Citra Tulisan Tangan (10x '1', 10x '3', 10x '9')", fontsize=16)
+    plt.tight_layout(rect=[0, 0.03, 1, 0.95])
+    plt.show()
+
+    # Lanjutkan ke prediksi
+    custom_images_A_batch = np.vstack(custom_images_A)
+    predictions_A = model_A.predict(custom_images_A_batch)
+    predicted_classes_A = np.argmax(predictions_A, axis=1)
+    
+    print("\n--- Hasil Prediksi Model A pada Citra Tulisan Tangan ---")
+    correct_count_A = 0
+    total_count = len(ground_truth_labels)
+    
+    for i in range(total_count):
+        true_label = ground_truth_labels[i]
+        pred_label = predicted_classes_A[i]
+        status = "Benar" if true_label == pred_label else "SALAH"
+        if status == "Benar":
+            correct_count_A += 1
+        print(f"Citra ke-{i+1} (Angka {true_label}): Prediksi model: {pred_label} ({status})")
+
+    accuracy_A = (correct_count_A / total_count) * 100
+    print(f"\nTotal Benar: {correct_count_A} dari {total_count}")
+    print(f"Akurasi Model A (Tulisan Tangan Sendiri): {accuracy_A:.2f}%")
+
+elif not SKIP_CUSTOM_EVAL and len(custom_images_A) == 0:
+     print("="*50)
+     print("ERROR: Folder 'NIM' ditemukan, tetapi tidak ada file gambar yang berhasil dimuat.")
+     print("Pastikan nama file (misal: 1.1.jpg) sudah benar.")
+     print("="*50)
+     SKIP_CUSTOM_EVAL = True
+
+print("\n--- Bagian 4: Membangun dan Melatih Model B (Transfer Learning MobileNetV2) ---")
+
+def build_model_B():
+    base_model = MobileNetV2(input_shape=(48, 48, 3), include_top=False, weights='imagenet')
+    base_model.trainable = False
+    inputs = Input(shape=(48, 48, 3), name="input_layer")
+    x = Rescaling(1./127.5, offset=-1)(inputs)
+    x = base_model(x, training=False)
+    x = GlobalAveragePooling2D()(x)
+    x = Dropout(0.2)(x)
+    outputs = Dense(10, activation='softmax', name="output_layer")(x)
+    model = Model(inputs, outputs)
+    model.compile(optimizer='adam', loss='categorical_crossentropy', metrics=['accuracy'])
+    return model
+
+model_B = build_model_B()
+model_B.summary()
+
+# Latih Model B 
+history_B = model_B.fit(
+    x_train_B, y_train_cat,
+    batch_size=128,
+    epochs=10,
+    validation_data=(x_test_B, y_test_cat)
+)
+
+# Tampilkan Plot Training History Model B (Kode Inline)
+print("\nMenampilkan Plot History Model B...")
+plt.figure(figsize=(12, 4))
+title_B = "Model B (MobileNetV2 Transfer Learning)"
+plt.subplot(1, 2, 1)
+plt.plot(history_B.history['accuracy'], label='Training Accuracy')
+plt.plot(history_B.history['val_accuracy'], label='Validation Accuracy')
+plt.title(f'Accuracy - {title_B}')
+plt.xlabel('Epoch')
+plt.ylabel('Accuracy')
+plt.legend()
+plt.subplot(1, 2, 2)
+plt.plot(history_B.history['loss'], label='Training Loss')
+plt.plot(history_B.history['val_loss'], label='Validation Loss')
+plt.title(f'Loss - {title_B}')
+plt.xlabel('Epoch')
+plt.ylabel('Loss')
+plt.legend()
+plt.suptitle(f'Training History for {title_B}', fontsize=16)
+plt.tight_layout(rect=[0, 0.03, 1, 0.95])
+plt.show()
+
+print("\n--- Bagian 5: Evaluasi Model B dengan Tulisan Tangan Sendiri ---")
+
+# Fungsi Pra-pemrosesan untuk Citra Custom (Model B)
+def preprocess_custom_image_B(filepath):
+    img = cv2.imread(filepath, cv2.IMREAD_GRAYSCALE)
+    if img is None:
+        return None
+    img_inverted = 255 - img
+    img_resized = cv2.resize(img_inverted, (48, 48), interpolation=cv2.INTER_AREA)
+    img_rgb = cv2.cvtColor(img_resized, cv2.COLOR_GRAY2RGB)
+    img_final = np.expand_dims(img_rgb, axis=0).astype('float32')
+    return img_final
+
+if SKIP_CUSTOM_EVAL:
+    print("Melewatkan Bagian 5 karena ada masalah di Bagian 3 (folder atau file tidak ditemukan).")
+else:
+    # Memuat dan Memproses 30 Citra Tulisan Tangan
+    custom_images_B = []
+    all_files = []
+    
+    for digit in [1, 3, 9]:
+        # Mencari di folder 'NIM' dan pola 'digit.*.jpg'
+        all_files.extend(sorted(glob.glob(os.path.join('NIM', f'{digit}.*.jpg'))))
+
+    for f in all_files:
+        processed_img = preprocess_custom_image_B(f)
+        if processed_img is not None:
+            custom_images_B.append(processed_img)
+
+    # Prediksi Menggunakan Model B
+    custom_images_B_batch = np.vstack(custom_images_B)
+    predictions_B = model_B.predict(custom_images_B_batch)
+    predicted_classes_B = np.argmax(predictions_B, axis=1)
+    
+    # Hitung Akurasi dan Sajikan Hasil
+    print("\n--- Hasil Prediksi Model B pada Citra Tulisan Tangan ---")
+    correct_count_B = 0
+    total_count = len(ground_truth_labels)
+    
+    for i in range(total_count):
+        true_label = ground_truth_labels[i]
+        pred_label = predicted_classes_B[i]
+        status = "Benar" if true_label == pred_label else "SALAH"
+        if status == "Benar":
+            correct_count_B += 1
+        print(f"Citra ke-{i+1} (Angka {true_label}): Prediksi model: {pred_label} ({status})")
+
+    accuracy_B = (correct_count_B / total_count) * 100
+    print(f"\nTotal Benar: {correct_count_B} dari {total_count}")
+    print(f"Akurasi Model B (Tulisan Tangan Sendiri): {accuracy_B:.2f}%")
+    
+    # Perbandingan Akhir
+    print("\n" + "="*50)
+    print("--- PERBANDINGAN AKURASI PADA TULISAN TANGAN SENDIRI ---")
+    print(f"Akurasi Model A (CNN dari Nol):     {accuracy_A:.2f}%")
+    print(f"Akurasi Model B (Transfer Learning): {accuracy_B:.2f}%")
+    print("="*50)
+
+print("\n--- Pengerjaan Selesai ---")
